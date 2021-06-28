@@ -3,11 +3,14 @@ package hyperconverged
 import (
 	"context"
 	"fmt"
-	consolev1 "github.com/openshift/api/console/v1"
 	"os"
 
+	"github.com/go-logr/logr"
 	networkaddonsv1 "github.com/kubevirt/cluster-network-addons-operator/pkg/apis/networkaddonsoperator/v1"
 	vmimportv1beta1 "github.com/kubevirt/vm-import-operator/pkg/apis/v2v/v1beta1"
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
+	consolev1 "github.com/openshift/api/console/v1"
 	conditionsv1 "github.com/openshift/custom-resource-status/conditions/v1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -15,24 +18,19 @@ import (
 	schedulingv1 "k8s.io/api/scheduling/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	kubevirtv1 "kubevirt.io/client-go/api/v1"
 	cdiv1beta1 "kubevirt.io/containerized-data-importer/pkg/apis/core/v1beta1"
 	sspv1beta1 "kubevirt.io/ssp-operator/api/v1beta1"
-
-	hcov1beta1 "github.com/kubevirt/hyperconverged-cluster-operator/pkg/apis/hco/v1beta1"
-	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/controller/common"
-	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/controller/operands"
-	hcoutil "github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
-	"github.com/kubevirt/hyperconverged-cluster-operator/version"
-
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/types"
-
+	hcov1beta1 "github.com/kubevirt/hyperconverged-cluster-operator/pkg/apis/hco/v1beta1"
+	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/controller/common"
 	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/controller/commonTestUtils"
+	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/controller/operands"
+	hcoutil "github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
+	"github.com/kubevirt/hyperconverged-cluster-operator/version"
 )
 
 // Mock TestRequest to simulate Reconcile() being called on an event for a watched resource
@@ -51,20 +49,57 @@ func initReconciler(client client.Client, old *ReconcileHyperConverged) *Reconci
 	operandHandler := operands.NewOperandHandler(client, s, true, eventEmitter)
 	upgradeMode := false
 	firstLoop := true
+	upgradeableCondition := newStubOperatorCondition()
+
 	if old != nil {
 		upgradeMode = old.upgradeMode
 		firstLoop = old.firstLoop
+		upgradeableCondition = old.upgradeableCondition
 	}
 	// Create a ReconcileHyperConverged object with the scheme and fake client
 	return &ReconcileHyperConverged{
-		client:         client,
-		scheme:         s,
-		operandHandler: operandHandler,
-		eventEmitter:   eventEmitter,
-		firstLoop:      firstLoop,
-		ownVersion:     version.Version,
-		upgradeMode:    upgradeMode,
+		client:               client,
+		scheme:               s,
+		operandHandler:       operandHandler,
+		eventEmitter:         eventEmitter,
+		firstLoop:            firstLoop,
+		ownVersion:           version.Version,
+		upgradeMode:          upgradeMode,
+		upgradeableCondition: upgradeableCondition,
 	}
+}
+
+type stubCondition struct {
+	condition *metav1.Condition
+}
+
+func newStubOperatorCondition() hcoutil.Condition {
+	cond := &stubCondition{}
+
+	return cond
+}
+
+func (nc *stubCondition) Set(_ context.Context, status metav1.ConditionStatus, reason, message string) error {
+	nc.condition = &metav1.Condition{
+		Type:    hcoutil.UpgradeableCondition,
+		Status:  status,
+		Reason:  reason,
+		Message: message,
+	}
+
+	return nil
+}
+
+func (nc *stubCondition) validate(status metav1.ConditionStatus, reason, message string) {
+	ExpectWithOffset(2, nc.condition).ToNot(BeNil())
+	ExpectWithOffset(2, nc.condition.Status).To(Equal(status))
+	ExpectWithOffset(2, nc.condition.Reason).To(Equal(reason))
+	ExpectWithOffset(2, nc.condition.Message).To(ContainSubstring(message))
+}
+
+func validateOperatorCondition(r *ReconcileHyperConverged, status metav1.ConditionStatus, reason, message string) {
+	cond := r.upgradeableCondition.(*stubCondition)
+	cond.validate(status, reason, message)
 }
 
 type BasicExpected struct {
@@ -282,4 +317,19 @@ func checkAvailability(hco *hcov1beta1.HyperConverged, expected metav1.Condition
 	if !found {
 		Fail(fmt.Sprintf(`Can't find 'Available' condition; %v`, hco.Status.Conditions))
 	}
+}
+
+type ClusterInfoMock struct{}
+
+func (ClusterInfoMock) Init(_ context.Context, _ client.Reader, _ logr.Logger, _ bool) error {
+	return nil
+}
+func (ClusterInfoMock) IsOpenshift() bool {
+	return true
+}
+func (ClusterInfoMock) IsRunningLocally() bool {
+	return false
+}
+func (ClusterInfoMock) IsManagedByOLM() bool {
+	return true
 }

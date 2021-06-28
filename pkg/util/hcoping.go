@@ -32,6 +32,6 @@ func hcoChecker(_ *http.Request) error {
 }
 
 func init() {
-	hcoReady = true
+	hcoReady = false
 	hcoPing = hcoChecker
 }
