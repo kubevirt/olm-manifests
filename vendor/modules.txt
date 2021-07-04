@@ -158,11 +158,14 @@ github.com/openshift/custom-resource-status/objectreferences/v1
 ## explicit
 github.com/operator-framework/api/pkg/lib/version
 github.com/operator-framework/api/pkg/operators
+github.com/operator-framework/api/pkg/operators/v1
 github.com/operator-framework/api/pkg/operators/v1alpha1
 # github.com/operator-framework/operator-lib v0.4.0
 ## explicit
+github.com/operator-framework/operator-lib/conditions
 github.com/operator-framework/operator-lib/handler
 github.com/operator-framework/operator-lib/handler/internal/metrics
+github.com/operator-framework/operator-lib/internal/utils
 # github.com/pborman/uuid v1.2.0
 github.com/pborman/uuid
 # github.com/pkg/errors v0.9.1

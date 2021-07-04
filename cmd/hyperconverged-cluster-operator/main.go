@@ -3,43 +3,45 @@ package main
 import (
 	"context"
 	"fmt"
-	networkaddonsv1 "github.com/kubevirt/cluster-network-addons-operator/pkg/apis/networkaddonsoperator/v1"
-	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/apis"
-	appsv1 "k8s.io/api/apps/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
-	schedulingv1 "k8s.io/api/scheduling/v1"
-	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/labels"
-	kubevirtv1 "kubevirt.io/client-go/api/v1"
-	"os"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
-
-	"github.com/kubevirt/hyperconverged-cluster-operator/cmd/cmdcommon"
-	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/controller/hyperconverged"
-	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/controller/operands"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
-	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
-	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
-
 	networkaddons "github.com/kubevirt/cluster-network-addons-operator/pkg/apis"
-	hcov1beta1 "github.com/kubevirt/hyperconverged-cluster-operator/pkg/apis/hco/v1beta1"
-	hcoutil "github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
+	networkaddonsv1 "github.com/kubevirt/cluster-network-addons-operator/pkg/apis/networkaddonsoperator/v1"
 	vmimportv1beta1 "github.com/kubevirt/vm-import-operator/pkg/apis/v2v/v1beta1"
 	openshiftconfigv1 "github.com/openshift/api/config/v1"
 	consolev1 "github.com/openshift/api/console/v1"
+	apiv1 "github.com/operator-framework/api/pkg/operators/v1"
 	csvv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	schedulingv1 "k8s.io/api/scheduling/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
+	kubevirtv1 "kubevirt.io/client-go/api/v1"
 	cdiv1beta1 "kubevirt.io/containerized-data-importer/pkg/apis/core/v1beta1"
 	sspv1beta1 "kubevirt.io/ssp-operator/api/v1beta1"
+	"os"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
+	"time"
+
+	"github.com/kubevirt/hyperconverged-cluster-operator/cmd/cmdcommon"
+	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/apis"
+	hcov1beta1 "github.com/kubevirt/hyperconverged-cluster-operator/pkg/apis/hco/v1beta1"
+	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/controller/hyperconverged"
+	"github.com/kubevirt/hyperconverged-cluster-operator/pkg/controller/operands"
+	hcoutil "github.com/kubevirt/hyperconverged-cluster-operator/pkg/util"
 )
 
 // Change below variables to serve metrics on different host or port.
@@ -58,8 +60,8 @@ var (
 		csvv1alpha1.AddToScheme,
 		vmimportv1beta1.AddToScheme,
 		admissionregistrationv1.AddToScheme,
-		consolev1.AddToScheme,
-		openshiftconfigv1.AddToScheme,
+		consolev1.Install,
+		openshiftconfigv1.Install,
 		monitoringv1.AddToScheme,
 		apiextensionsv1.AddToScheme,
 		kubevirtv1.AddToScheme,
@@ -98,8 +100,10 @@ func main() {
 	// Detect OpenShift version
 	ctx := context.TODO()
 	ci := hcoutil.GetClusterInfo()
-	err = ci.CheckRunningInOpenshift(mgr.GetAPIReader(), ctx, logger, cmdHelper.IsRunInLocal())
+	err = ci.Init(ctx, mgr.GetAPIReader(), logger, cmdHelper.IsRunInLocal())
 	cmdHelper.ExitOnError(err, "Cannot detect cluster type")
+
+	logger.Info("Registering Components.")
 
 	eventEmitter := hcoutil.GetEventEmitter()
 	// Set temporary configuration, until the regular client is ready
@@ -113,8 +117,46 @@ func main() {
 	err = mgr.AddReadyzCheck("ready", readyCheck)
 	cmdHelper.ExitOnError(err, "unable to add ready check")
 
+	// Force OperatorCondition Upgradeable to False
+	//
+	// We have to at least default the condition to False or
+	// OLM will use the Readiness condition via our readiness probe instead:
+	// https://olm.operatorframework.io/docs/advanced-tasks/communicating-operator-conditions-to-olm/#setting-defaults
+	//
+	// We want to force it to False to ensure that the final decision about whether
+	// the operator can be upgraded stays within the hyperconverged controller.
+	logger.Info("Setting OperatorCondition.")
+	upgradeableCondition, err := hcoutil.NewOperatorCondition(ci, mgr.GetClient(), apiv1.Upgradeable)
+	cmdHelper.ExitOnError(err, "Cannot create Upgradeable OperatorCondition")
+
+	retries := 60 // 30 * 10 seconds = 10 minutes
+	ticker := time.NewTicker(time.Second * 10)
+	for range ticker.C {
+		err := upgradeableCondition.Set(ctx, metav1.ConditionFalse, hcoutil.UpgradeableInitReason, hcoutil.UpgradeableInitMessage)
+		if err != nil {
+			retries--
+			logger.Error(err, "Setting OperatorCondition.", "retries left", retries)
+			if retries == 0 {
+				ticker.Stop()
+				cmdHelper.ExitOnError(err, "Cannot set OperatorCondition")
+			}
+		} else {
+			ticker.Stop()
+			break
+		}
+	}
+
+	//err = wait.ExponentialBackoff(retry.DefaultRetry, func() (bool, error) {
+	//	err := upgradeableCondition.Set(ctx, metav1.ConditionFalse, hcoutil.UpgradeableInitReason, hcoutil.UpgradeableInitMessage)
+	//	if err != nil {
+	//		logger.Error(err, "Setting OperatorCondition.")
+	//	}
+	//	return err == nil, nil
+	//})
+	//cmdHelper.ExitOnError(err, "Cannot set OperatorCondition")
+
 	// Setup all Controllers
-	if err := hyperconverged.RegisterReconciler(mgr, ci); err != nil {
+	if err := hyperconverged.RegisterReconciler(mgr, ci, upgradeableCondition); err != nil {
 		logger.Error(err, "")
 		eventEmitter.EmitEvent(nil, corev1.EventTypeWarning, "InitError", "Unable to register HyperConverged controller; "+err.Error())
 		os.Exit(1)
@@ -125,6 +167,9 @@ func main() {
 
 	logger.Info("Starting the Cmd.")
 	eventEmitter.EmitEvent(nil, corev1.EventTypeNormal, "Init", "Starting the HyperConverged Pod")
+
+	hcoutil.SetReady(true)
+
 	// Start the Cmd
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		logger.Error(err, "Manager exited non-zero")
