@@ -105,8 +105,8 @@ echo "----- Get virtctl"
 KV_VERSION=$( ${CMD} get kubevirt.kubevirt.io/kubevirt-kubevirt-hyperconverged -n ${HCO_NAMESPACE} -o=jsonpath="{.status.observedKubeVirtVersion}")
 ARCH=$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/') || windows-amd64.exe
 echo ${ARCH}
-curl -L -o virtctl https://github.com/kubevirt/kubevirt/releases/download/${KV_VERSION}/virtctl-${KV_VERSION}-${ARCH}
-chmod +x virtctl
+curl -L -o ~/virtctl https://github.com/kubevirt/kubevirt/releases/download/${KV_VERSION}/virtctl-${KV_VERSION}-${ARCH}
+chmod +x ~/virtctl
 ###################
 
 ### Create a VM ###
@@ -114,9 +114,10 @@ Msg "Create a simple VM on the previous version cluster, before the upgrade"
 ${CMD} create namespace ${VMS_NAMESPACE}
 ${CMD} apply -n ${VMS_NAMESPACE} -f ./hack/vm.yaml
 ${CMD} get vm -n ${VMS_NAMESPACE} -o yaml testvm
-./virtctl start testvm -n ${VMS_NAMESPACE}
+~/virtctl start testvm -n ${VMS_NAMESPACE}
 ./hack/retry.sh 30 10 "${CMD} get vmi -n ${VMS_NAMESPACE} testvm -o jsonpath='{ .status.phase }' | grep 'Running'"
 ${CMD} get vmi -n ${VMS_NAMESPACE} -o yaml testvm
+./hack/vmuptime.ext
 
 echo "----- HCO deployOVS annotation and OVS state in CNAO CR before the upgrade"
 PREVIOUS_OVS_ANNOTATION=$(${CMD} get ${HCO_KIND} ${HCO_RESOURCE_NAME} -n ${HCO_NAMESPACE} -o jsonpath='{.metadata.annotations.deployOVS}')
@@ -235,8 +236,11 @@ Msg "make sure that the VM is still running, after the upgrade"
 ${CMD} get vm -n ${VMS_NAMESPACE} -o yaml testvm
 ${CMD} get vmi -n ${VMS_NAMESPACE} -o yaml testvm
 ${CMD} get vmi -n ${VMS_NAMESPACE} testvm -o jsonpath='{ .status.phase }' | grep 'Running'
+./hack/vmuptime.ext
 
-./virtctl stop testvm -n ${VMS_NAMESPACE}
+# TODO: compare the output with the previous execution
+
+~/virtctl stop testvm -n ${VMS_NAMESPACE}
 ${CMD} delete vm -n ${VMS_NAMESPACE} testvm
 
 KUBECTL_BINARY=${CMD} ./hack/test_quick_start.sh
