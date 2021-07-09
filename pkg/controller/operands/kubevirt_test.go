@@ -172,6 +172,8 @@ Version: 1.2.3`)
 			Expect(foundResource.Spec.Configuration.DeveloperConfiguration.FeatureGates).To(ContainElement(
 				kvWithHostPassthroughCPU,
 			))
+			Expect(foundResource.Spec.Configuration.DeveloperConfiguration.DiskVerification).ToNot(BeNil())
+			Expect(foundResource.Spec.Configuration.DeveloperConfiguration.DiskVerification.MemoryLimit).Should(Equal(kvDiskVerificationMemoryLimit))
 
 			Expect(foundResource.Spec.Configuration.MachineType).Should(Equal("machine-type"))
 
