@@ -69,6 +69,7 @@ var (
 )
 
 func main() {
+	// TODO: remove me, fake PR to trigger CI
 	cmdHelper.InitiateCommand()
 
 	watchNamespace := cmdHelper.GetWatchNS()
